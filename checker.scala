@@ -1,9 +1,9 @@
 import scala.io._
-import cs162.assign3.syntax._
+import cs162.assign4.syntax._
 import Aliases._
 import scala.io.Source.fromFile
 
-//—————————————————————————————————————————————————————————————————————————
+//——————————————————————————————————————————————————————————————————————————————
 // Main entry point
 
 object Checker {
@@ -14,6 +14,8 @@ object Checker {
 
   def main(args: Array[String]) {
     val filename = args(0)
+
+    //    args.foreach { x => extracted(x) }
     val input = fromFile(filename).mkString
     Parsers.program.run(input, filename) match {
       case Left(e) => println(e)
@@ -24,27 +26,70 @@ object Checker {
         try {
           getType(program.e, new TypeEnv())
           println(Pretty.prettySyntax(program))
-          println("This program is well-typed:\n")
+          println("This program is well-typed")
         } catch { case Illtyped => println("This program is ill-typed") }
     }
   }
-  // Gets all the constructors associated with a given type name.
-  // For example, consider the following typedefs:
+
+  def extracted(filename: String) = {
+    val input = fromFile(filename).mkString
+    Parsers.program.run(input, filename) match {
+      case Left(e) => println(e)
+      case Right(program) =>
+        val prettied = Pretty.prettySyntax(program)
+        typeDefs = program.typedefs
+
+        try {
+          println(Pretty.prettySyntax(program))
+          getType(program.e, new TypeEnv())
+          println("This program " + filename + " is well-typed:\n")
+          if (filename.contains("good")) println("Correct") else { println("Incorrect"); }
+        } catch {
+          case Illtyped =>
+            println("This program " + filename + " is ill-typed")
+            if (filename.contains("bad")) println("Correct") else { println("Incorrect"); }
+        }
+
+    }
+  }
+
+  // Gets a listing of the constructor names associated with a given type definition.
+  // For example, consider the following type definition:
   //
-  // type Either = Left num | Right bool
-  // type Maybe = Some num | None
+  // type Either['A, 'B] = Left 'A | Right 'B
   //
-  // With respect to the above typedefs, `constructors` will return
-  // the following underneath the given arguments:
+  // Some example calls to `constructors`, along with return values:
   //
-  // constructors(Label("Either")) = Map(Label("Left") -> NumT, Label("Right") -> BoolT)
-  // constructors(Label("Maybe")) = Map(Label("Some") -> NumT, Label("None") -> UnitT)
-  // constructors(Label("Fake")) throws Illtyped
+  // constructors("Either") = Set("Left", "Right")
+  // constructors("Foo") = a thrown Illtyped exception
   //
-  // TypeDef(label, Map<label, type>)
-  // Get all the constructors with label name
-  def constructors(name: Label): Map[Label, Type] =
-    typeDefs.find(_.name == name).map(_.constructors).getOrElse(throw Illtyped)
+  def constructors(name: Label): Set[Label] =
+    typeDefs.find(_.name == name).map(_.constructors.keySet).getOrElse(throw Illtyped)
+
+  // Takes the following parameters:
+  // -The name of a user-defined constructor
+  // -The types which we wish to apply to the constructor
+  // Returns the type that is held within the constructor.
+  //
+  // For example, consider the following type definition:
+  //
+  // type Either['A, 'B] = Left 'A | Right 'B
+  //
+  // Some example calls to `constructorType`, along with return values:
+  //
+  // constructorType("Left", Seq(NumT, BoolT)) = NumT
+  // constructorType("Right", Seq(NumT, BoolT)) = BoolT
+  // constructorType("Left", Seq(NumT)) = a thrown Illtyped exception
+  // constructorType("Right", Seq(BoolT)) = a thrown Illtyped exception
+  // constructorType("Foo", Seq(UnitT)) = a thrown Illtyped exception
+  // constructorType("Left", Seq(UnitT)) = a thrown Illtyped exception
+  //
+  def constructorType(constructor: Label, types: Seq[Type]): Type =
+    (for {
+      td <- typeDefs
+      rawType <- td.constructors.get(constructor)
+      if (types.size == td.tvars.size)
+    } yield replace(rawType, td.tvars.zip(types).toMap)).headOption.getOrElse(throw Illtyped)
 
   // Gets the type of the constructor.
   // For example, considering the typedefs given in the `constructors` comment above,
@@ -54,45 +99,65 @@ object Checker {
   // typename(Label("Right")) = Label("Either")
   // typename(Label("Some")) = Label("Maybe")
   // typename(Label("None")) = Label("Maybe")
-  // Get the parent type of the constructor with label
+  //
   def typename(constructor: Label): Label =
     typeDefs.find(_.constructors.contains(constructor)).getOrElse(throw Illtyped).name
 
+  // Given a type and a mapping of type variables to other types, it
+  // will recursively replace the type variables in `t` with the
+  // types in `tv2t`, if possible.  If a type variable isn't
+  // in `tv2t`, it should simply return the original type.  If a
+  // `TFunT` is encountered, then whatever type variables it defines
+  // (the first parameter in the `TFunT`) should overwrite whatever is in
+  // `tv2t` right before a recursive `replace` call.  In other words,
+  // type variables can shadow other type variables.
+  //
+  def replace(t: Type, tv2t: Map[TVar, Type]): Type =
+    t match {
+      case NumT | BoolT | UnitT => t // FILL ME IN
+
+      // Params[var->Type], this type might be a TypeVar(which is a type)
+      case FunT(params, ret) =>
+        FunT(params.map(p => replace(p, tv2t)), replace(ret, tv2t))
+
+      case RcdT(fields)     => RcdT(fields.map { f => (f._1, replace(f._2, tv2t)) })
+
+      case TypT(name, typs) => TypT(name, typs.map { t => replace(t, tv2t) })
+      // Base case
+      case tv: TVar         => tv2t.getOrElse(tv, tv)
+      // Need to forget about everything we had about tvars before
+      case TFunT(tvars, funt) => {
+        //        val ntv2t = tv2t.filter { vt => !tvars.contains(vt._1) }
+        val replacedFunT = replace(funt, tv2t)
+        replacedFunT match {
+          case ft: FunT => TFunT(tvars, ft)
+          case _        => throw Illtyped
+        }
+      }
+    }
+
+  // HINT - the bulk of this remains unchanged from the previous assignment.
+  // Feel free to copy and paste code from your last submission into here.
   def getType(e: Exp, env: TypeEnv): Type =
     e match {
-      // variables
       case x: Var                        => env.getOrElse(x, throw Illtyped)
 
-      // numeric literals
-      case _: Num                        => NumT
+      case _: Num                        => NumT // FILL ME IN
 
-      // boolean literals
-      case _: Bool                       => BoolT
+      case _: Bool                       => BoolT // FILL ME IN
 
-      // `nil` - the literal for unit
-      case _: NilExp                     => UnitT
+      case _: Unit                       => UnitT // FILL ME IN
 
-      // builtin arithmetic operators
       case Plus | Minus | Times | Divide => NumT // FILL ME IN
 
-      // builtin relational operators
       case LT | EQ                       => BoolT // FILL ME IN
 
-      // builtin logical operators
       case And | Or                      => BoolT // FILL ME IN
 
-      // builtin logical operators
       case Not                           => BoolT // FILL ME IN
 
-      // function creation ->I
-      // Return a function type
       case Fun(params, body)             => FunT(params.map(a => a._2), getType(body, env ++ params))
 
-      // function call
-      // ->E
-      // 1. Check if functions and params are defined
-      // 1. Check type mapping between args and parameters(length and types), throw exception if not match
-      // 2. return the fun's return type if parameter matches args
       case Call(fun, args) => getType(fun, env) match {
         case FunT(params, ret) => {
           if (params.zip(args.map(a => getType(a, env))).filter(z => z._1 == z._2).size == Math.max(params.length, args.length))
@@ -104,10 +169,6 @@ object Checker {
         case _     => throw Illtyped
       }
 
-      // conditionals 
-      // 1. e1 could be bool or a var
-      //   2. If it's bool check two return type matches otherwise throw exception
-      //   3. If it's var, get the var's type and do same as 2
       case If(e1, e2, e3) => {
         getType(e1, env) match {
           case BoolT => if (getType(e2, env).equals(getType(e3, env))) getType(e2, env) else throw Illtyped
@@ -115,28 +176,20 @@ object Checker {
         }
       }
 
-      // let binding
-      // If we know that e1 has type t1, we add x -> t1 mapping
-      // the env and try to getType(e2..) using this env, return the 
-      // type we got or throw exceptions during these type getType functions
       case Let(x, e1, e2) => {
         val t1 = getType(e1, env)
         getType(e2, env ++ (Seq(x -> t1)))
       }
 
-      // recursive binding
-      // x appears in e1
       case Rec(x, t1, e1, e2) => {
         if (getType(e1, env ++ (Seq(x -> t1))) != t1) throw Illtyped
         getType(e2, env ++ (Seq(x -> t1)))
       }
 
-      // record literals
       case Record(fields) => {
         RcdT(fields.map(f => (f._1, getType(f._2, env))))
       }
 
-      // record access
       case Access(e, field) => {
         getType(e, env) match {
           case RcdT(fields) => fields.getOrElse(field, throw Illtyped)
@@ -144,44 +197,77 @@ object Checker {
         }
       }
 
-      // constructor use
-      // TypeDef(label, Map<label, type>)
-      // 1. Get the union type name of constructor, Right => Either
-      // 2. Get union type's child types Either=> Right->NumT, Left->BoolT
-      // 3. Evaluate the exp to a type e => Num
-      // 4. Go through child types, find what type does child type need as parameter  Right=>NumT
-      // 5. Check if the result of 4 match e's type e ?= NumT
-      // Return type of the union type
-      case Construct(constructor, e) => {
-        val unionTypeName = typename(constructor)
-        val unionTypeDef = constructors(unionTypeName)
-        val expType = getType(e, env)
-        val constructorType = unionTypeDef.getOrElse(constructor, throw Illtyped)
-        if (expType.equals(constructorType)) TypT(unionTypeName) else throw Illtyped
+      case Construct(constructor, typs, e) => {
+        // 1. Get the type's name from constructor's name: Left => Either
+        val name = typename(constructor)
+
+        // 2. Get what this unionType's type parameter declaration: Either[A,B] => (A,B) 
+        val tvars = typeDefs.find { x => x.name.equals(name) }.getOrElse(throw Illtyped).tvars;
+
+        // 3. Check if typs parameters length match the tvars in type definition
+        if (tvars.length != typs.length) throw Illtyped
+
+        // 4. Zip tvar to typs
+        //        val zipedTvarsToTyps = tvars.zip(typs).toMap
+
+        // 5. Evaluate e under current env
+        val eType = getType(e, env)
+
+        // 6. Check if this e type matches constructor's type
+        if (!eType.equals(constructorType(constructor, typs))) throw Illtyped
+
+        TypT(name, typs)
+
       }
 
-      // pattern matching (case ... of ...)
       case Match(e, cases) => {
-        // e should be of some kinds of TypT(label)
+        // 1. Get expression's type, should already substitute type: Bar<num>(3) => TypT(Foo, (Num))
         val eType = getType(e, env)
-        val eTypeLabel = eType match {
-          case TypT(label) => label
-          case _           => throw Illtyped
-        }
-        val eTypeConstructors = constructors(eTypeLabel)
-        // Check if constructors number matches passed in cases
-        // and if var types in cases matches types in constructors
-        if (eTypeConstructors.size != cases.size) throw Illtyped
-        //        if(cases.filter(c=> c._2)
-        //  Check each contained type in eTypeConstructors has been covered by cases
-        cases.foreach(c => { eTypeConstructors.getOrElse(c._1, throw Illtyped) })
 
-        // Check if all cases return the same t
-        // Here var should get it's type from eTypeConstructors from typedef since it's the newly created variable that will
-        // be used in case expression evaluation
-        val list = cases.map(c => getType(c._3, env ++ Seq((c._2 -> eTypeConstructors.getOrElse(c._1, throw Illtyped)))))
+        // 2. Make sure this exp is a user defined type, and get it's label
+        // don't care about the type in each constructor
+        val tType = eType match {
+          case t @ TypT(label, _) => t
+          case _                  => throw Illtyped
+        }
+
+        // 3. Get the typs(after substituion) associated with this eType
+        val typs = tType.typs;
+
+        // 4. For this user defined type, get the typeVars associated with it
+        val tvars = typeDefs.find { x => x.name.equals(tType.name) }.getOrElse(throw Illtyped).tvars
+
+        // 5. For this user defined type, get all constructor's label
+        val consLabels = constructors(tType.name)
+
+        // 6. If cases does not match all constructors, illtyped
+        if (consLabels.size != cases.size) throw Illtyped
+        cases.foreach(c => { if (!consLabels.contains(c._1)) throw Illtyped })
+
+        // 7. Each case has a constructor label and from that label we can know the type of value constructor holds by calling 
+        // constructorType(label, typs), typs are the solid type. Then we evaluate each case's return type 
+        val list = cases.map(c => getType(c._3, env ++ Seq((c._2 -> constructorType(c._1, typs)))))
+
+        // 8.Check if all of them are the same
         if (!list.forall { t => t.equals(list(0)) }) throw Illtyped
         list(0)
+      }
+
+      case TAbs(tvars, fun) => {
+        getType(fun, env) match {
+          case f: FunT => TFunT(tvars, f)
+          case _       => throw Illtyped
+        }
+      }
+
+      case TApp(e, typs) => {
+        getType(e, env) match {
+          case TFunT(tvars, f) => {
+            if (tvars.length != typs.length) throw Illtyped
+            replace(f, tvars.zip(typs).toMap)
+          }
+          case _ => throw Illtyped
+        }
       }
     }
 }
