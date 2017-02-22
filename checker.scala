@@ -127,8 +127,8 @@ object Checker {
       case tv: TVar         => tv2t.getOrElse(tv, tv)
       // Need to forget about everything we had about tvars before
       case TFunT(tvars, funt) => {
-        //        val ntv2t = tv2t.filter { vt => !tvars.contains(vt._1) }
-        val replacedFunT = replace(funt, tv2t)
+        val ntv2t = tv2t.filter { vt => !tvars.contains(vt._1) }
+        val replacedFunT = replace(funt, ntv2t)
         replacedFunT match {
           case ft: FunT => TFunT(tvars, ft)
           case _        => throw Illtyped
